@@ -76,3 +76,33 @@ def build_from_cfg(cfg, registry, default_args=None):
         for name, value in default_args.items():
             args.setdefault(name, value)
     return obj_cls(**args)
+
+# def build_from_cfg(cfg, registry, default_args=None):
+#     """Build a module from config dict.
+
+#     Args:
+#         cfg (dict): Config dict. It should at least contain the key "type".
+#         registry (:obj:`Registry`): The registry to search the type from.
+#         default_args (dict, optional): Default initialization arguments.
+
+#     Returns:
+#         obj: The constructed object.
+#     """
+#     assert isinstance(cfg, dict) and "type" in cfg
+#     assert isinstance(default_args, dict) or default_args is None
+#     args = cfg.copy()
+#     obj_type = args.pop("type")
+#     if is_str(obj_type):
+#         obj_cls = registry.get(obj_type)
+#         if obj_cls is None:
+#             raise KeyError(f"{obj_type} not in the {registry.name} registry")
+#     elif inspect.isclass(obj_type):
+#         obj_cls = obj_type
+#     else:
+#         raise TypeError(f"type must be a str or valid type, "
+#                         f"but got {type(obj_type)}")
+#     if default_args is not None and obj_type == "CSPDarknet":
+#         for name, value in default_args.items():
+#             if name != 'cfg':  # Remove 'cfg' from default_args
+#                 args.setdefault(name, value)
+#     return obj_cls(**args)

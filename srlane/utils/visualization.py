@@ -49,7 +49,9 @@ def imshow_lanes(img, lanes, show=False, out_file=None, width=4):
     lanes_xys.sort(key=lambda xys: xys[0][0])
     for idx, xys in enumerate(lanes_xys):
         for i in range(1, len(xys)):
-            cv2.line(img, xys[i - 1], xys[i], COLORS[idx], thickness=width)
+            # plot point
+            cv2.circle(img, xys[i], 5, COLORS[idx], -1)
+            # cv2.line(img, xys[i - 1], xys[i], COLORS[idx], thickness=width)
 
     if show:
         cv2.imshow("view", img)

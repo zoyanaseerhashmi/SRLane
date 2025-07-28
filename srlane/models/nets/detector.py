@@ -55,10 +55,10 @@ class TwoStageDetector(nn.Module):
             return self._forward_train(batch)
         return self._forward_test(batch)
 
-    def __repr__(self):
-        separator_info = "======== Param. Info. ========"
-        num_params = sum(map(lambda x: x.numel(), self.parameters()))
-        info = f"#Params of {self._get_name()}: "
-        info += f"{num_params / 10 ** 6:<.2f}[M]"
-        return '\n'.join([separator_info, repr(self.backbone), repr(self.neck),
-                          repr(self.rpn_head), repr(self.roi_head), info])
+    # def __repr__(self):
+    #     separator_info = "======== Param. Info. ========"
+    #     num_params = sum(map(lambda x: x.numel(), self.parameters()))
+    #     info = f"#Params of {self._get_name()}: "
+    #     info += f"{num_params / 10 ** 6:<.2f}[M]"
+    #     return '\n'.join([separator_info, repr(self.backbone), repr(self.neck),
+    #                       repr(self.rpn_head), repr(self.roi_head), info])

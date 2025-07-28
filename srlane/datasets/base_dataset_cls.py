@@ -12,7 +12,7 @@ from srlane.utils.visualization import imshow_lanes
 
 
 @DATASETS.register_module
-class BaseDataset(Dataset):
+class BaseDatasetCls(Dataset):
     def __init__(self, data_root, split, processes=None, cfg=None):
         self.cfg = cfg
         self.logger = logging.getLogger(__name__)
@@ -66,50 +66,50 @@ class BaseDataset(Dataset):
                                            self.cfg.ori_img_w)),
                 "img_cut_height": self.cfg.cut_height}
         
-        # gt_line_clr = np.zeros((self.cfg.max_lanes, 4), dtype=np.float32)
-        # gt_line_typ = np.zeros((self.cfg.max_lanes, 4), dtype=np.float32)
-        # gt_line_ego = np.zeros((self.cfg.max_lanes, 3), dtype=np.float32)
-        # gt_line_class = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
-        # gt_line_group = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
-        # gt_line_curvature = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
-        # gt_line_direction = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
-        # gt_curb_position = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
+        gt_line_clr = np.zeros((self.cfg.max_lanes, 4), dtype=np.float32)
+        gt_line_typ = np.zeros((self.cfg.max_lanes, 4), dtype=np.float32)
+        gt_line_ego = np.zeros((self.cfg.max_lanes, 3), dtype=np.float32)
+        gt_line_class = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
+        gt_line_group = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
+        gt_line_curvature = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
+        gt_line_direction = np.zeros((self.cfg.max_lanes, 2), dtype=np.float32)
+        gt_curb_position = np.zeros((self.cfg.max_lanes, 3), dtype=np.float32)
 
 
-        # if len(data_info['line_color']) != 0:
-        #     gt_line_clr[:len(data_info['line_color'])] = np.array(data_info['line_color'])
+        if len(data_info['line_color']) != 0:
+            gt_line_clr[:len(data_info['line_color'])] = np.array(data_info['line_color'])
         
-        # if len(data_info['line_typ']) != 0:
-        #     gt_line_typ[:len(data_info['line_typ'])] = np.array(data_info['line_typ'])
+        if len(data_info['line_typ']) != 0:
+            gt_line_typ[:len(data_info['line_typ'])] = np.array(data_info['line_typ'])
         
-        # if len(data_info['line_ego']) != 0:
-        #     gt_line_ego[:len(data_info['line_ego'])] = np.array(data_info['line_ego'])
+        if len(data_info['line_ego']) != 0:
+            gt_line_ego[:len(data_info['line_ego'])] = np.array(data_info['line_ego'])
         
-        # if len(data_info['line_class']) != 0:
-        #     gt_line_class[:len(data_info['line_class'])] = np.array(data_info['line_class'])
+        if len(data_info['line_class']) != 0:
+            gt_line_class[:len(data_info['line_class'])] = np.array(data_info['line_class'])
         
-        # if len(data_info['line_group']) != 0:
-        #     gt_line_group[:len(data_info['line_group'])] = np.array(data_info['line_group'])
+        if len(data_info['line_group']) != 0:
+            gt_line_group[:len(data_info['line_group'])] = np.array(data_info['line_group'])
         
-        # if len(data_info['line_curvature']) != 0:
-        #     gt_line_curvature[:len(data_info['line_curvature'])] = np.array(data_info['line_curvature'])
+        if len(data_info['line_curvature']) != 0:
+            gt_line_curvature[:len(data_info['line_curvature'])] = np.array(data_info['line_curvature'])
         
-        # if len(data_info['line_direction']) != 0:
-        #     gt_line_direction[:len(data_info['line_direction'])] = np.array(data_info['line_direction'])
+        if len(data_info['line_direction']) != 0:
+            gt_line_direction[:len(data_info['line_direction'])] = np.array(data_info['line_direction'])
         
-        # if len(data_info['curb_position']) != 0:
-        #     gt_curb_position[:len(data_info['curb_position'])] = np.array(data_info['curb_position'])
+        if len(data_info['curb_position']) != 0:
+            gt_curb_position[:len(data_info['curb_position'])] = np.array(data_info['curb_position'])
         
-        # sample.update({
-        #     "gt_line_clr": gt_line_clr,
-        #     "gt_line_typ": gt_line_typ,
-        #     "gt_line_ego": gt_line_ego,
-        #     "gt_line_class": gt_line_class,
-        #     "gt_line_group": gt_line_group,
-        #     "gt_line_curvature": gt_line_curvature,
-        #     "gt_line_direction": gt_line_direction,
-        #     "gt_curb_position": gt_curb_position
-        # })
+        sample.update({
+            "gt_line_clr": gt_line_clr,
+            "gt_line_typ": gt_line_typ,
+            "gt_line_ego": gt_line_ego,
+            "gt_line_class": gt_line_class,
+            "gt_line_group": gt_line_group,
+            "gt_line_curvature": gt_line_curvature,
+            "gt_line_direction": gt_line_direction,
+            "gt_curb_position": gt_curb_position
+        })
         meta = DC(meta, cpu_only=True)
         sample.update({"meta": meta})
 

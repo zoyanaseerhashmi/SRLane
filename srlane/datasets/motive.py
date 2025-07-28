@@ -2,18 +2,19 @@ import os
 import os.path as osp
 from os.path import join
 
+import json
 import numpy as np
 import pickle as pkl
 from tqdm import tqdm
 
-import srlane.evaluation.culane_metric as culane_metric
+import srlane.evaluation.motive_culane_metric as motive_metric
 from .base_dataset import BaseDataset
 from .registry import DATASETS
 
 LIST_FILE = {
-    "train": "list/train_gt.txt",
-    "val": "list/train_test.txt",
-    "test": "list/train_test.txt",
+    "train": "imageSets/v11/train.txt",
+    "val": "imageSets/v11/test.txt",
+    "test": "imageSets/v11/test.txt",
 }
 
 CATEGORYS = {
@@ -30,18 +31,18 @@ CATEGORYS = {
 
 
 @DATASETS.register_module
-class CULane(BaseDataset):
+class Motive(BaseDataset):
     def __init__(self, data_root, split, processes=None, cfg=None):
         super().__init__(data_root, split, processes=processes, cfg=cfg)
         self.list_path = join(data_root, LIST_FILE[split])
         self.split = split
         self.load_annotations()
-        self.h_samples = np.arange(270, 590, 8) / 590
+        self.h_samples = np.arange(0, 720, 8) / 720
 
     def load_annotations(self, diff_thr=15):
-        self.logger.info("Loading CULane annotations...")
+        self.logger.info("Loading Motive annotations...")
         os.makedirs(".cache", exist_ok=True)
-        cache_path = f".cache/culane_{self.split}.pkl"
+        cache_path = f".cache/motive_{self.split}.pkl"
         if osp.exists(cache_path):
             with open(cache_path, "rb") as cache_file:
                 self.data_infos = pkl.load(cache_file)
@@ -51,43 +52,41 @@ class CULane(BaseDataset):
 
         self.data_infos = []
         with open(self.list_path) as list_file:
-            prev_img = np.zeros(1)
             for i, line in tqdm(enumerate(list_file)):
                 infos = {}
-                line = line.split()
-                img_line = line[0]
-                img_line = img_line[1 if img_line[0] == '/' else 0::]
-                img_path = join(self.data_root, img_line)
-                if self.split == "train":
-                    img = self.imread(img_path)
-                    diff = np.abs(img.astype(np.float32) -
-                                  prev_img.astype(np.float32)).sum()
-                    diff /= (img.shape[0] * img.shape[1] * img.shape[2])
-                    prev_img = img
-                    if diff < diff_thr:
-                        continue
+                img_line = line.strip()
+                img_path = join(self.data_root, "images_resized", img_line) 
+
                 infos["img_name"] = img_line
                 infos["img_path"] = img_path
 
-                if len(line) > 1:
-                    mask_line = line[1]
-                    mask_line = mask_line[1 if mask_line[0] == '/' else 0::]
-                    mask_path = join(self.data_root, mask_line)
-                    infos["mask_path"] = mask_path
 
-                if len(line) > 2:
-                    exist_list = [int(marker) for marker in line[2:]]
-                    infos["lane_exist"] = np.array(exist_list)
+                infos["mask_path"] = None
 
-                anno_path = img_path[:-3] + "lines.txt"
+                anno_path = join(self.data_root, "annotations_resized", img_line[:-3]+"json")
+                if not osp.exists(anno_path):
+                    continue
                 with open(anno_path, 'r') as anno_file:
-                    data = [
-                        list(map(float, line.split()))
-                        for line in anno_file.readlines()
-                    ]
-                lanes = [
-                    [(lane[i], lane[i + 1]) for i in range(0, len(lane), 2)
-                     if lane[i] >= 0 and lane[i + 1] >= 0] for lane in data]
+                    data = json.load(anno_file)
+                    lanes_data = data["lanes"]
+                    
+                    exist_list = []
+                    lanes = []
+                    for lane in lanes_data:
+                        lane_points = []
+                        if len(lane):
+                            exist_list.append(1)
+
+                            for kpt in lane["polyline"]:
+                                point = tuple([kpt[1], kpt[0]])
+                                lane_points.append(point)
+                                
+                            lanes.append(lane_points)
+                        else:
+                            exist_list.append(0)
+                            
+                exist_list = np.array(exist_list)
+                        
                 lanes = [list(set(lane)) for lane in
                          lanes]  # remove duplicated points
                 lanes = [lane for lane in lanes
@@ -97,6 +96,8 @@ class CULane(BaseDataset):
                 lanes = [sorted(lane, key=lambda x: x[1])
                          for lane in lanes]  # sort by y
                 infos["lanes"] = lanes
+                infos["lane_exist"] = np.array(exist_list)
+
                 self.data_infos.append(infos)
 
         with open(cache_path, "wb") as cache_file:
@@ -124,6 +125,7 @@ class CULane(BaseDataset):
         for idx, pred in enumerate(predictions):
             output_dir = join(
                 output_basedir,
+                "predictions",
                 osp.dirname(self.data_infos[idx]["img_name"]))
             output_filename = osp.basename(
                 self.data_infos[idx]["img_name"])[:-3] + "lines.txt"
@@ -141,8 +143,9 @@ class CULane(BaseDataset):
         #                                        iou_thresholds=[0.5],
         #                                        official=True)
 
-        result = culane_metric.eval_predictions(output_basedir,
-                                                self.data_root,
+        result = motive_metric.eval_predictions(join(output_basedir, "predictions"),
+                                                self.data_root+"/annotations_resized",
+                                                self.data_root+"/images_resized",
                                                 self.list_path,
                                                 iou_thresholds=[0.5],
                                                 official=True)
