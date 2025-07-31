@@ -137,9 +137,14 @@ class LocalAngleHead(nn.Module):
         # a <= b is equivalent to NOT (a > b)
         return 1.0 - self.gt(a, b)
 
+    def sin(self, theta):
+        return (16*theta*(torch.pi - theta)) / (5*torch.pi**2 - 4*theta*(torch.pi - theta))
+    
+    def cos(self, theta):
+        return (torch.pi**2 - 4*theta**2) / (torch.pi**2 + theta**2)
+
     def tan(self, theta):
-        itheta = torch.complex(torch.tensor(0.0),theta)
-        return -torch.tanh(itheta).imag
+        return self.sin(theta) / self.cos(theta)
 
     def forward(self,
                 feats: List[Tensor], ):
