@@ -85,18 +85,20 @@ class Runner(object):
     @torch.no_grad()
     def validate(self):
         if not self.val_loader:
-            self.val_loader = build_dataloader(self.cfg.dataset.val,
+            self.val_loader = build_dataloader(self.cfg.dataset.test,
                                                self.cfg,
                                                is_train=False)
         net = self.net
         net.eval()
+        # save_model(net, self.recorder)
         predictions = []
         for i, data in enumerate(tqdm(self.val_loader, desc="Validate")):
             output = net(data)
             output = net.module.roi_head.get_lanes(output, data["meta"])
-            predictions.extend(output)
+            predictions.extend(output['preds'])
+
             if self.cfg.view:
-                self.val_loader.dataset.view(output, data["meta"])
+                self.val_loader.dataset.view(output['preds'], output['cls_preds'], data["meta"])
 
         metric = self.val_loader.dataset.evaluate(predictions,
                                                   self.cfg.work_dir)

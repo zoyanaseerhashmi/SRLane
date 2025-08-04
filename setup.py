@@ -95,6 +95,10 @@ def get_extensions():
     ext_ops = extension(
         name=ext_name,
         sources=op_files,
+        extra_compile_args={
+            'cxx': ['-O2'],
+            'nvcc': ['-O2', '--expt-relaxed-constexpr', '-allow-unsupported-compiler']
+        }
     )
 
     extensions.append(ext_ops)

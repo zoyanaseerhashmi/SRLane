@@ -15,7 +15,7 @@ from srlane.models.losses.lineiou_loss import liou_loss
 from srlane.models.registry import HEADS
 
 
-class RefineHead(nn.Module):
+class RefineHeadMotive(nn.Module):
     """Refine head.
 
     Args:
@@ -39,7 +39,7 @@ class RefineHead(nn.Module):
                  sample_points: int,
                  num_groups: int,
                  cfg=None):
-        super(RefineHead, self).__init__()
+        super(RefineHeadMotive, self).__init__()
         self.stage = stage
         self.cfg = cfg
         self.img_w = self.cfg.img_w
@@ -78,18 +78,49 @@ class RefineHead(nn.Module):
                               nn.Linear(2 * fc_hidden_dim, fc_hidden_dim)))
         reg_modules = list()
         cls_modules = list()
+        ### our code ###
+        cls_color_modules = list()
+        cls_type_modules = list()
+        cls_ego_modules = list()
+        cls_line_vs_curb_modules = list()
+        cls_group_modules = list()
+        cls_curvature_modules = list()
+        cls_direction_modules = list()
+        cls_curb_position_modules = list()
+        ### our code ###
         for _ in range(1):
             reg_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
                             nn.ReLU()]
             cls_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
                             nn.ReLU()]
+            ### our code ###
+            cls_color_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_type_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_ego_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            ### our code ###
 
         self.reg_modules = nn.ModuleList(reg_modules)
         self.cls_modules = nn.ModuleList(cls_modules)
+
+        ### our code ###
+        self.cls_color_modules = nn.ModuleList(cls_color_modules)
+        self.cls_type_modules = nn.ModuleList(cls_type_modules)
+        self.cls_ego_modules = nn.ModuleList(cls_ego_modules)
+        ### our code ###
+
         self.reg_layers = nn.Linear(
             fc_hidden_dim,
             self.n_offsets + 1 + 1)
         self.cls_layers = nn.Linear(fc_hidden_dim, 2)
+
+        ### our code ###
+        self.cls_color_layers = nn.Linear(fc_hidden_dim, 3) # white, yellow, unknown, none
+        self.cls_type_layers = nn.Linear(fc_hidden_dim, 3) # solid, broken, unknown, none
+        self.cls_ego_layers = nn.Linear(fc_hidden_dim, 3) # left, right, none
+        ### our code ###
         self.init_weights()
 
     def init_weights(self):
@@ -174,6 +205,9 @@ class RefineHead(nn.Module):
         cls_features = fc_features
         reg_features = fc_features
         predictions = priors.clone()
+        # create a tensor of zeros with shape (predictions.shape[0], predictions.shape[1], predictions.shape[2]+9)
+        predictions = torch.cat((predictions, predictions.new_zeros(predictions.shape[0], predictions.shape[1], 9)), dim=2)
+        # predictions = torch.cat((predictions, torch.zeros(predictions.shape[0], predictions.shape[1], predictions.shape[2]+9)), dim=2)
         if self.training or self.last_stage:
             for cls_layer in self.cls_modules:
                 cls_features = cls_layer(cls_features)
@@ -181,6 +215,33 @@ class RefineHead(nn.Module):
             cls_logits = cls_logits.reshape(
                 batch_size, -1, cls_logits.shape[1])  # (B, num_priors, 2)
             predictions[:, :, :2] = cls_logits
+
+            ### our code ###
+            clr_cls_features = fc_features
+            for clr_cls_layer in self.cls_color_modules:
+                clr_cls_features = clr_cls_layer(clr_cls_features)
+            clr_cls_logits = self.cls_color_layers(clr_cls_features)
+            clr_cls_logits = clr_cls_logits.reshape(
+                batch_size, -1, clr_cls_logits.shape[1])  # (B, num_priors, 3)
+            predictions[:, :, 2:5] = clr_cls_logits
+
+            typ_cls_features = fc_features
+            for typ_cls_layer in self.cls_type_modules:
+                typ_cls_features = typ_cls_layer(typ_cls_features)
+            typ_cls_logits = self.cls_type_layers(typ_cls_features)
+            typ_cls_logits = typ_cls_logits.reshape(
+                batch_size, -1, typ_cls_logits.shape[1])  # (B, num_priors, 3)
+            predictions[:, :, 5:8] = typ_cls_logits
+
+            ego_cls_features = fc_features
+            for ego_cls_layer in self.cls_ego_modules:
+                ego_cls_features = ego_cls_layer(ego_cls_features)
+            ego_cls_logits = self.cls_ego_layers(ego_cls_features)
+            ego_cls_logits = ego_cls_logits.reshape(
+                batch_size, -1, ego_cls_logits.shape[1])  # (B, num_priors, 3)
+            predictions[:, :, 8:11] = ego_cls_logits
+            ### our code ###
+
         for reg_layer in self.reg_modules:
             reg_features = reg_layer(reg_features)
         reg = self.reg_layers(reg_features)
@@ -189,13 +250,13 @@ class RefineHead(nn.Module):
         #  predictions[:, :, 2] += reg[:, :, 0]
         # predictions[:, :, 3] = reg[:, :, 1]
         # predictions[..., 4:] += reg[..., 2:]
-        predictions[:, :, 2:] += reg
+        predictions[:, :, 11:] += reg
 
         return predictions, fc_features, attn
 
 
 @HEADS.register_module
-class CascadeRefineHead(nn.Module):
+class CascadeRefineHeadMotive(nn.Module):
     def __init__(self,
                  num_points: int = 72,
                  prior_feat_channels: int = 64,
@@ -204,7 +265,7 @@ class CascadeRefineHead(nn.Module):
                  sample_points: int= 36 ,
                  num_groups: int = 6,
                  cfg=None):
-        super(CascadeRefineHead, self).__init__()
+        super(CascadeRefineHeadMotive, self).__init__()
         self.cfg = cfg
         self.img_w = self.cfg.img_w
         self.img_h = self.cfg.img_h
@@ -223,7 +284,7 @@ class CascadeRefineHead(nn.Module):
         self.stage_heads = nn.ModuleList()
         for i in range(refine_layers):
             self.stage_heads.append(
-                RefineHead(stage=i,
+                RefineHeadMotive(stage=i,
                            num_points=num_points,
                            prior_feat_channels=prior_feat_channels,
                            fc_hidden_dim=fc_hidden_dim,
@@ -266,10 +327,22 @@ class CascadeRefineHead(nn.Module):
         attn_lists = output["attn_lists"]
         targets = batch["gt_lane"].clone()
 
+        ### our code ###
+        line_clr_cls_targets_batch = batch["gt_line_clr"].clone()
+        line_typ_cls_targets_batch = batch["gt_line_typ"].clone()
+        line_ego_cls_targets_batch = batch["gt_line_ego"].clone()
+        ### our code ###
+
         cls_loss = 0
         l1_loss = 0
         iou_loss = 0
         attn_loss = 0
+
+        ### our code ###
+        line_clr_cls_loss = 0
+        line_typ_cls_loss = 0
+        line_ego_cls_loss = 0
+        ### our code ###
 
         for stage in range(0, self.refine_layers):
             predictions_list = predictions_lists[stage]
@@ -285,10 +358,21 @@ class CascadeRefineHead(nn.Module):
                         cls_pred, cls_target).sum()
                     continue
 
+                ### our code ###
+                line_clr_cls_predictions = predictions[:, 2:5]   # (num_priors, 4)
+                line_typ_cls_predictions = predictions[:, 5:8]   # (num_priors, 4)
+                line_ego_cls_predictions = predictions[:, 8:11]  # (num_priors, 3)
+
                 predictions = torch.cat((predictions[:, :2],
-                                         predictions[:, 2:4] * self.n_strips,
-                                         predictions[:, 4:] * self.img_w),
+                                         predictions[:, 11:13] * self.n_strips,
+                                         predictions[:, 13:] * self.img_w),
                                         dim=1)
+                ### our code ###
+                
+                # predictions = torch.cat((predictions[:, :2],
+                #                          predictions[:, 2:4] * self.n_strips,
+                #                          predictions[:, 4:] * self.img_w),
+                #                         dim=1)
 
                 with torch.no_grad():
                     (matched_row_inds, matched_col_inds) = assign(
@@ -304,6 +388,28 @@ class CascadeRefineHead(nn.Module):
                 cls_target = predictions.new_zeros(predictions.shape[0]).long()
                 cls_target[matched_row_inds] = 1
                 cls_pred = predictions[:, :2]
+
+                # color classification loss
+                # clr_cls_predictions size is (num_priors, 3)
+                # clr_cls_targets size is (num_lines, 3)
+                ### our code ###
+
+                # color classification loss
+                line_clr_cls_predictions = line_clr_cls_predictions[matched_row_inds, :]
+                line_clr_cls_targets = line_clr_cls_targets_batch[idx, matched_col_inds, :]
+                line_clr_cls_loss = line_clr_cls_loss + self.cls_criterion(line_clr_cls_predictions, line_clr_cls_targets).sum() / line_clr_cls_targets.shape[0]
+
+                # type classification loss
+                line_typ_cls_predictions = line_typ_cls_predictions[matched_row_inds, :]
+                line_typ_cls_targets = line_typ_cls_targets_batch[idx, matched_col_inds, :]
+                line_typ_cls_loss = line_typ_cls_loss + self.cls_criterion(line_typ_cls_predictions, line_typ_cls_targets).sum() / line_typ_cls_targets.shape[0]
+
+                # ego classification loss
+                line_ego_cls_predictions = line_ego_cls_predictions[matched_row_inds, :]
+                line_ego_cls_targets = line_ego_cls_targets_batch[idx, matched_col_inds, :]
+                line_ego_cls_loss = line_ego_cls_loss + self.cls_criterion(line_ego_cls_predictions, line_ego_cls_targets).sum() / line_ego_cls_targets.shape[0]
+                ### our code ###
+
 
                 # regression targets
                 reg_yl = predictions[matched_row_inds, 2:4]
@@ -333,10 +439,20 @@ class CascadeRefineHead(nn.Module):
         iou_loss /= (len(targets) * self.refine_layers)
         attn_loss /= (len(targets) * self.refine_layers)
 
+        ### our code start ###
+        line_clr_cls_loss /= (len(targets) * self.refine_layers)
+        line_typ_cls_loss /= (len(targets) * self.refine_layers)
+        line_ego_cls_loss /= (len(targets) * self.refine_layers)
+        ### our code end ###
+
         return_value = {"cls_loss": cls_loss,
                         "l1_loss": l1_loss,
                         "iou_loss": iou_loss,
-                        "attn_loss": attn_loss}
+                        "attn_loss": attn_loss,
+                        "line_clr_cls_loss": line_clr_cls_loss,
+                        "line_typ_cls_loss": line_typ_cls_loss,
+                        "line_ego_cls_loss": line_ego_cls_loss,
+                        }
 
         return return_value
 
@@ -349,7 +465,10 @@ class CascadeRefineHead(nn.Module):
         lanes = []
 
         for lane in predictions:
+            ### our code ###
             lane_xs = lane[4:]  # normalized value
+            # lane_xs = lane[13:]
+            ### our code ###
             start = min(max(0, int(round(lane[2].item() * self.n_strips))),
                         self.n_strips)
             length = int(round(lane[3].item()))
@@ -386,8 +505,16 @@ class CascadeRefineHead(nn.Module):
         """
         softmax = nn.Softmax(dim=1)
 
-        decoded = []
+        decoded = {}
         img_metas = [item for img_meta in img_metas.data for item in img_meta]
+        decoded = {
+                "preds": [],
+                "cls_preds": {
+                    "color": [],
+                    "type": [],
+                    "ego": [],
+                },
+            }
         for predictions, img_meta in zip(output, img_metas):
             # filter out the conf lower than conf threshold
             threshold = self.cfg.test_parameters.conf_threshold
@@ -397,10 +524,25 @@ class CascadeRefineHead(nn.Module):
             scores = scores[keep_inds]
 
             if predictions.shape[0] == 0:
-                decoded.append([])
+                decoded['preds'].append([])
+                decoded['cls_preds']['color'].append([])
+                decoded['cls_preds']['type'].append([])
+                decoded['cls_preds']['ego'].append([])
                 continue
+            
+            ### our code ###
+            clr_cls_predictions = softmax(predictions[:, 2:5])   # (num_priors, 4)
+            typ_cls_predictions = softmax(predictions[:, 5:8])   # (num_priors, 4)
+            ego_cls_predictions = softmax(predictions[:, 8:11])  # (num_priors, 3)
+
+            predictions = torch.cat((predictions[:, :2],
+                                    predictions[:, 11:13],
+                                    predictions[:, 13:]),
+                                    dim=1)
+            ### our code ###
 
             nms_preds = predictions.detach().clone()
+            
             nms_preds[..., 2:4] *= self.n_strips
             nms_preds[..., 3] = nms_preds[..., 2] + nms_preds[..., 3] - 1
             nms_preds[..., 4:] *= self.img_w
@@ -413,7 +555,11 @@ class CascadeRefineHead(nn.Module):
             # print(num_to_keep)
             # print(keep)
             if num_to_keep.item() > self.cfg.max_lanes or num_to_keep.item() <= 0:
-                decoded.append([])
+                decoded['preds'].append([])
+                decoded['cls_preds']['color'].append([])
+                decoded['cls_preds']['type'].append([])
+                decoded['cls_preds']['ego'].append([])
+
                 print("metas", img_metas, "num_to_keep", num_to_keep)
                 continue
                 
@@ -421,16 +567,29 @@ class CascadeRefineHead(nn.Module):
 
             predictions = predictions[keep]
 
+            ### our code ###
+            clr_cls_predictions = clr_cls_predictions[keep]
+            typ_cls_predictions = typ_cls_predictions[keep]
+            ego_cls_predictions = ego_cls_predictions[keep]
+            ### our code ###
+
             if predictions.shape[0] == 0:
-                decoded.append([])
+                decoded['preds'].append([])
+                decoded['cls_preds']['color'].append([])
+                decoded['cls_preds']['type'].append([])
+                decoded['cls_preds']['ego'].append([])
                 continue
             predictions[:, 3] = torch.round(predictions[:, 3] * self.n_strips)
             if as_lanes:
                 pred = self.predictions_to_pred(predictions, img_meta)
             else:
                 pred = predictions
-            decoded.append(pred)
+            decoded['preds'].append(pred)
+            decoded['cls_preds']['color'].append(clr_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['type'].append(typ_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['ego'].append(ego_cls_predictions.cpu().numpy())
 
+            
         return decoded
 
     def __repr__(self):

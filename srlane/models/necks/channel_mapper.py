@@ -45,6 +45,6 @@ class ChannelMapper(nn.Module):
         ]
         return tuple(outs)
 
-    def __repr__(self):
-        num_params = sum(map(lambda x: x.numel(), self.parameters()))
-        return f"#Params of {self._get_name()}: {num_params / 10 ** 3:<.2f}[K]"
+    # def __repr__(self):
+    #     num_params = sum(map(lambda x: x.numel(), self.parameters()))
+    #     return f"#Params of {self._get_name()}: {num_params / 10 ** 3:<.2f}[K]"

@@ -89,8 +89,9 @@ class Recorder(object):
             os.system("cp %s %s" % (f, os.path.join(to_path, "code", f[2:])))
 
     def get_work_dir(self):
-        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        work_dir = os.path.join(self.cfg.work_dirs, now)
+        # now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # work_dir = os.path.join(self.cfg.work_dirs, now)
+        work_dir = self.cfg.work_dirs
         if not os.path.exists(work_dir):
             os.makedirs(work_dir)
         return work_dir

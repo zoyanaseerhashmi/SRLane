@@ -1,0 +1,766 @@
+from typing import List
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+from .multi_segment_attention import MultiSegmentAttention
+from srlane.ops import nms
+from srlane.utils.lane import Lane
+from srlane.models.losses.focal_loss import FocalLoss
+from srlane.models.utils.dynamic_assign import assign
+from srlane.models.utils.a3d_sample import sampling_3d
+from srlane.models.losses.lineiou_loss import liou_loss
+from srlane.models.registry import HEADS
+
+
+class RefineHeadMotive(nn.Module):
+    """Refine head.
+
+    Args:
+        stage: Refinement stage index.
+        num_points: Number of points to describe a lane.
+        prior_feat_channels: Input channel.
+        in_channel: Input channels.
+        fc_hidden_dim: Hidden channels.
+        refine_layers: Total number of refinement stage.
+        sample_points: Number of points for sampling lane feature.
+        num_groups: Number of lane segment groups.
+        cfg: Model config.
+    """
+
+    def __init__(self,
+                 stage: int,
+                 num_points: int,
+                 prior_feat_channels: int,
+                 fc_hidden_dim: int,
+                 refine_layers: int,
+                 sample_points: int,
+                 num_groups: int,
+                 cfg=None):
+        super(RefineHeadMotive, self).__init__()
+        self.stage = stage
+        self.cfg = cfg
+        self.img_w = self.cfg.img_w
+        self.img_h = self.cfg.img_h
+        self.n_strips = num_points - 1
+        self.n_offsets = num_points
+        self.sample_points = sample_points
+        self.fc_hidden_dim = fc_hidden_dim
+        self.num_groups = num_groups
+        self.num_level = cfg.n_fpn
+        self.last_stage = stage == refine_layers - 1
+
+        self.register_buffer(name="sample_x_indexs", tensor=(
+                torch.linspace(0, 1,
+                               steps=self.sample_points,
+                               dtype=torch.float32) * self.n_strips).long())
+        self.register_buffer(name="prior_feat_ys", tensor=torch.flip(
+            (1 - self.sample_x_indexs.float() / self.n_strips), dims=[-1]))
+
+        self.prior_feat_channels = prior_feat_channels
+        self.z_embeddings = nn.Parameter(torch.zeros(self.sample_points),
+                                         requires_grad=True)
+        # self.gather_fc = nn.Conv1d(sample_points, fc_hidden_dim,
+        #                            kernel_size=prior_feat_channels,
+        #                            groups=self.num_groups)
+        self.gather_fc = nn.Conv2d(
+            in_channels=sample_points,
+            out_channels=fc_hidden_dim,
+            kernel_size=(prior_feat_channels, 1),
+            groups=self.num_groups
+        )
+        self.shuffle_fc = nn.Linear(fc_hidden_dim, fc_hidden_dim)
+        self.channel_fc = nn.ModuleList()
+        self.segment_attn = nn.ModuleList()
+        for i in range(1):
+            self.segment_attn.append(
+                MultiSegmentAttention(fc_hidden_dim, num_groups=num_groups))
+            self.channel_fc.append(
+                nn.Sequential(nn.Linear(fc_hidden_dim, 2 * fc_hidden_dim),
+                              nn.ReLU(),
+                              nn.Linear(2 * fc_hidden_dim, fc_hidden_dim)))
+        reg_modules = list()
+        cls_modules = list()
+        ### our code ###
+        cls_color_modules = list()
+        cls_type_modules = list()
+        cls_ego_modules = list()
+        cls_line_vs_curb_modules = list()
+        cls_group_modules = list()
+        cls_curvature_modules = list()
+        cls_direction_modules = list()
+        cls_curb_position_modules = list()
+        ### our code ###
+        for _ in range(1):
+            reg_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            ### our code ###
+            cls_color_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_type_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_ego_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_line_vs_curb_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_group_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_curvature_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_direction_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            cls_curb_position_modules += [nn.Linear(self.fc_hidden_dim, self.fc_hidden_dim),
+                            nn.ReLU()]
+            ### our code ###
+
+        self.reg_modules = nn.ModuleList(reg_modules)
+        self.cls_modules = nn.ModuleList(cls_modules)
+
+        ### our code ###
+        self.cls_color_modules = nn.ModuleList(cls_color_modules)
+        self.cls_type_modules = nn.ModuleList(cls_type_modules)
+        self.cls_ego_modules = nn.ModuleList(cls_ego_modules)
+        self.cls_line_vs_curb_modules = nn.ModuleList(cls_line_vs_curb_modules)
+        self.cls_group_modules = nn.ModuleList(cls_group_modules)
+        self.cls_curvature_modules = nn.ModuleList(cls_curvature_modules)
+        self.cls_direction_modules = nn.ModuleList(cls_direction_modules)
+        self.cls_curb_position_modules = nn.ModuleList(cls_curb_position_modules)
+        ### our code ###
+
+        self.reg_layers = nn.Linear(
+            fc_hidden_dim,
+            self.n_offsets + 1 + 1)
+        self.cls_layers = nn.Linear(fc_hidden_dim, 2)
+
+        ### our code ###
+        self.cls_color_layers = nn.Linear(fc_hidden_dim, 4) # white, yellow, unknown, none
+        self.cls_type_layers = nn.Linear(fc_hidden_dim, 4) # solid, broken, unknown, none
+        self.cls_ego_layers = nn.Linear(fc_hidden_dim, 3) # left, right, none
+        self.cls_line_vs_curb_layers = nn.Linear(fc_hidden_dim, 2) # line, curb
+        self.cls_group_layers = nn.Linear(fc_hidden_dim, 2) # double, single
+        self.cls_curvature_layers = nn.Linear(fc_hidden_dim, 2) # curve, straight
+        self.cls_direction_layers = nn.Linear(fc_hidden_dim, 2) # upstream, downstream
+        self.cls_curb_position_layers = nn.Linear(fc_hidden_dim, 3) # left, right
+        ### our code ###
+        self.init_weights()
+
+    def init_weights(self):
+        for m in self.cls_layers.parameters():
+            nn.init.normal_(m, mean=0., std=1e-3)
+        for m in self.reg_layers.parameters():
+            nn.init.normal_(m, mean=0., std=1e-3)
+        nn.init.normal_(self.z_embeddings, mean=self.cfg.z_mean[self.stage],
+                        std=self.cfg.z_std[self.stage])
+
+
+    def translate_to_linear_weight(self,
+                                   ref: Tensor,
+                                   num_total: int = 3,
+                                   tau: int = 2.0):
+        grid = torch.arange(num_total, device=ref.device,
+                            dtype=ref.dtype).view(
+            *[len(ref.shape) * [1, ] + [-1, ]])
+        ref = ref.unsqueeze(-1).clone()
+        l2 = (ref - grid).pow(2.0).div(tau).abs().neg()
+        weight = torch.softmax(l2, dim=-1)
+
+        return weight  # (1, 36, 3)
+
+    def pool_prior_features(self,
+                            batch_features: List[Tensor],
+                            num_priors: int,
+                            prior_feat_xs: Tensor, ):
+        """Pool prior feature from feature map.
+        Args:
+            batch_features: Input feature maps.
+        """
+        batch_size = batch_features[0].shape[0]
+
+        prior_feat_xs = prior_feat_xs.view(batch_size, num_priors, self.sample_points, 1)
+        prior_feat_ys = self.prior_feat_ys.unsqueeze(0).expand(
+            batch_size * num_priors,
+            self.sample_points).view(
+            batch_size, num_priors, -1, 1)
+        
+        # print(prior_feat_xs.shape, prior_feat_ys.shape)
+
+        grid = torch.cat((prior_feat_xs, prior_feat_ys), dim=-1)
+        if self.training or not hasattr(self, "z_weight"):
+            z_weight = self.translate_to_linear_weight(self.z_embeddings)
+            z_weight = z_weight.view(1, 1, self.sample_points, -1).expand(
+                batch_size,
+                num_priors,
+                self.sample_points,
+                self.num_level)
+        else:
+            z_weight = self.z_weight.view(1, 1, self.sample_points, -1).expand(
+                batch_size,
+                num_priors,
+                self.sample_points,
+                self.num_level)
+
+        feature = sampling_3d(grid, z_weight,
+                              batch_features)  # (b, n_prior, n_point, c)
+        # feature = feature.view(batch_size * num_priors, -1,
+        #                        self.prior_feat_channels)
+        # print(feature.shape)    
+        feature = feature.permute(0,2,3,1).view(batch_size, self.sample_points, self.prior_feat_channels, -1)        
+        feature = self.gather_fc(feature).reshape(batch_size, num_priors, -1)
+        # print(feature.shape)
+        for i in range(1):
+            res_feature, attn = self.segment_attn[i](feature, attn_mask=None)
+            feature = feature + self.channel_fc[i](res_feature)
+        return feature, attn
+
+    def forward(self, batch_features, priors, pre_feature=None):
+        batch_size = batch_features[-1].shape[0]
+        num_priors = priors.shape[1]
+        prior_feat_xs = (priors[..., 4 + self.sample_x_indexs, :]).flip(
+            dims=[2])  # top to bottom
+
+        batch_prior_features, attn = self.pool_prior_features(
+            batch_features, num_priors, prior_feat_xs)
+
+        fc_features = batch_prior_features
+        fc_features = fc_features.reshape(batch_size * num_priors,
+                                          self.fc_hidden_dim)
+
+        if pre_feature is not None:
+            fc_features = fc_features + pre_feature.view(*fc_features.shape)
+
+        cls_features = fc_features
+        reg_features = fc_features
+        predictions = priors.squeeze(-1).clone()
+        # create a tensor of zeros with shape (predictions.shape[0], predictions.shape[1], predictions.shape[2]+9)
+        predictions = torch.cat((predictions, predictions.new_zeros(predictions.shape[0], predictions.shape[1], 22)), dim=2)
+        # predictions = torch.cat((predictions, torch.zeros(predictions.shape[0], predictions.shape[1], predictions.shape[2]+9)), dim=2)
+        if self.training or self.last_stage:
+            for cls_layer in self.cls_modules:
+                cls_features = cls_layer(cls_features)
+            cls_logits = self.cls_layers(cls_features)
+            cls_logits = cls_logits.reshape(
+                batch_size, -1, cls_logits.shape[1])  # (B, num_priors, 2)
+            predictions[:, :, :2] = cls_logits
+
+            ### our code ###
+            clr_cls_features = fc_features
+            for clr_cls_layer in self.cls_color_modules:
+                clr_cls_features = clr_cls_layer(clr_cls_features)
+            clr_cls_logits = self.cls_color_layers(clr_cls_features)
+            clr_cls_logits = clr_cls_logits.reshape(
+                batch_size, -1, clr_cls_logits.shape[1])  # (B, num_priors, 3)
+            predictions[:, :, 2:6] = clr_cls_logits
+
+            typ_cls_features = fc_features
+            for typ_cls_layer in self.cls_type_modules:
+                typ_cls_features = typ_cls_layer(typ_cls_features)
+            typ_cls_logits = self.cls_type_layers(typ_cls_features)
+            typ_cls_logits = typ_cls_logits.reshape(
+                batch_size, -1, typ_cls_logits.shape[1])  # (B, num_priors, 3)
+            predictions[:, :, 6:10] = typ_cls_logits
+
+            ego_cls_features = fc_features
+            for ego_cls_layer in self.cls_ego_modules:
+                ego_cls_features = ego_cls_layer(ego_cls_features)
+            ego_cls_logits = self.cls_ego_layers(ego_cls_features)
+            ego_cls_logits = ego_cls_logits.reshape(
+                batch_size, -1, ego_cls_logits.shape[1])  # (B, num_priors, 3)
+            predictions[:, :, 10:13] = ego_cls_logits
+
+            line_vs_curb_cls_features = fc_features
+            for line_vs_curb_cls_layer in self.cls_line_vs_curb_modules:
+                line_vs_curb_cls_features = line_vs_curb_cls_layer(fc_features)
+            line_vs_curb_cls_logits = self.cls_line_vs_curb_layers(line_vs_curb_cls_features)
+            line_vs_curb_cls_logits = line_vs_curb_cls_logits.reshape(
+                batch_size, -1, line_vs_curb_cls_logits.shape[1])  # (B, num_priors, 2)
+            predictions[:, :, 13:15] = line_vs_curb_cls_logits
+
+            group_cls_features = fc_features
+            for group_cls_layer in self.cls_group_modules:
+                group_cls_features = group_cls_layer(group_cls_features)
+            group_cls_logits = self.cls_group_layers(group_cls_features)
+            group_cls_logits = group_cls_logits.reshape(
+                batch_size, -1, group_cls_logits.shape[1])  # (B, num_priors, 2)
+            predictions[:, :, 15:17] = group_cls_logits
+
+            curvature_cls_features = fc_features
+            for curvature_cls_layer in self.cls_curvature_modules:
+                curvature_cls_features = curvature_cls_layer(curvature_cls_features)
+            curvature_cls_logits = self.cls_curvature_layers(curvature_cls_features)
+            curvature_cls_logits = curvature_cls_logits.reshape(
+                batch_size, -1, curvature_cls_logits.shape[1])  # (B, num_priors, 2)
+            predictions[:, :, 17:19] = curvature_cls_logits
+
+            direction_cls_features = fc_features
+            for direction_cls_layer in self.cls_direction_modules:
+                direction_cls_features = direction_cls_layer(direction_cls_features)
+            direction_cls_logits = self.cls_direction_layers(direction_cls_features)
+            direction_cls_logits = direction_cls_logits.reshape(
+                batch_size, -1, direction_cls_logits.shape[1])  # (B, num_priors, 2)
+            predictions[:, :, 19:21] = direction_cls_logits
+
+            curb_position_cls_features = fc_features
+            for curb_position_cls_layer in self.cls_curb_position_modules:
+                curb_position_cls_features = curb_position_cls_layer(curb_position_cls_features)
+            curb_position_cls_logits = self.cls_curb_position_layers(curb_position_cls_features)
+            curb_position_cls_logits = curb_position_cls_logits.reshape(
+                batch_size, -1, curb_position_cls_logits.shape[1])  # (B, num_priors, 2)
+            predictions[:, :, 21:24] = curb_position_cls_logits
+            ### our code ###
+
+        for reg_layer in self.reg_modules:
+            reg_features = reg_layer(reg_features)
+        reg = self.reg_layers(reg_features)
+        reg = reg.reshape(batch_size, -1, reg.shape[1])
+
+        #  predictions[:, :, 2] += reg[:, :, 0]
+        # predictions[:, :, 3] = reg[:, :, 1]
+        # predictions[..., 4:] += reg[..., 2:]
+        predictions[:, :, 24:] += reg
+
+        # # Concatenate all logits along the last dimension
+        # predictions = torch.cat((
+        #     # priors.clone(),
+        #     cls_logits,
+        #     clr_cls_logits,
+        #     typ_cls_logits,
+        #     ego_cls_logits,
+        #     line_vs_curb_cls_logits,
+        #     group_cls_logits,
+        #     curvature_cls_logits,
+        #     direction_cls_logits,
+        #     curb_position_cls_logits,
+        #     reg), dim=2)
+
+        return predictions, fc_features, attn
+
+
+@HEADS.register_module
+class CascadeRefineHeadMotiveCls(nn.Module):
+    def __init__(self,
+                 num_points: int = 72,
+                 prior_feat_channels: int = 64,
+                 fc_hidden_dim: int = 64,
+                 refine_layers: int = 1,
+                 sample_points: int= 36 ,
+                 num_groups: int = 6,
+                 cfg=None):
+        super(CascadeRefineHeadMotiveCls, self).__init__()
+        self.cfg = cfg
+        self.img_w = self.cfg.img_w
+        self.img_h = self.cfg.img_h
+        self.n_strips = num_points - 1
+        self.n_offsets = num_points
+        self.sample_points = sample_points
+        self.refine_layers = refine_layers
+        self.fc_hidden_dim = fc_hidden_dim
+        self.num_groups = num_groups
+        self.prior_feat_channels = prior_feat_channels
+
+        self.register_buffer(name="prior_ys",
+                             tensor=torch.linspace(1, 0, steps=self.n_offsets,
+                                                   dtype=torch.float32))
+
+        self.stage_heads = nn.ModuleList()
+        for i in range(refine_layers):
+            self.stage_heads.append(
+                RefineHeadMotive(stage=i,
+                           num_points=num_points,
+                           prior_feat_channels=prior_feat_channels,
+                           fc_hidden_dim=fc_hidden_dim,
+                           refine_layers=refine_layers,
+                           sample_points=sample_points,
+                           num_groups=num_groups,
+                           cfg=cfg))
+
+        self.cls_criterion = FocalLoss(alpha=0.25, gamma=2.)
+
+    def forward(self, x, **kwargs):
+        batch_features = list(x)
+        batch_features.reverse()
+        priors = kwargs["priors"]
+        pre_feature = None
+        predictions_lists = []
+        attn_lists = []
+
+        # iterative refine
+        for stage in range(self.refine_layers):
+            predictions, pre_feature, attn = self.stage_heads[stage](
+                batch_features, priors,
+                pre_feature)
+            predictions_lists.append(predictions)
+            attn_lists.append(attn)
+
+            if stage != self.refine_layers - 1:
+                priors = predictions.clone().detach()
+
+        if self.training:
+            output = {"predictions_lists": predictions_lists,
+                      "attn_lists": attn_lists}
+            return output
+        return predictions_lists[-1]
+
+    def loss(self,
+             output,
+             batch):
+        predictions_lists = output["predictions_lists"]
+        attn_lists = output["attn_lists"]
+        targets = batch["gt_lane"].clone()
+
+        ### our code ###
+        line_clr_cls_targets_batch = batch["gt_line_clr"].clone()
+        line_typ_cls_targets_batch = batch["gt_line_typ"].clone()
+        line_ego_cls_targets_batch = batch["gt_line_ego"].clone()
+        line_class_cls_targets_batch = batch["gt_line_class"].clone()
+        line_group_cls_targets_batch = batch["gt_line_group"].clone()
+        line_curvature_cls_targets_batch = batch["gt_line_curvature"].clone()
+        line_direction_cls_targets_batch = batch["gt_line_direction"].clone()
+        curb_position_cls_targets_batch = batch["gt_curb_position"].clone()
+        ### our code ###
+
+        cls_loss = 0
+        l1_loss = 0
+        iou_loss = 0
+        attn_loss = 0
+
+        ### our code ###
+        line_clr_cls_loss = 0
+        line_typ_cls_loss = 0
+        line_ego_cls_loss = 0
+        line_class_cls_loss = 0
+        line_group_cls_loss = 0
+        line_curvature_cls_loss = 0
+        line_direction_cls_loss = 0
+        curb_position_cls_loss = 0
+        ### our code ###
+
+        for stage in range(0, self.refine_layers):
+            predictions_list = predictions_lists[stage]
+            attn_list = attn_lists[stage]
+            for idx, (predictions, target, attn) in enumerate(
+                    zip(predictions_list, targets, attn_list)):
+                target = target[target[:, 1] == 1]
+                if len(target) == 0:
+                    cls_target = predictions.new_zeros(
+                        predictions.shape[0]).long()
+                    cls_pred = predictions[:, :2]
+                    cls_loss = cls_loss + self.cls_criterion(
+                        cls_pred, cls_target).sum()
+                    continue
+
+                ### our code ###
+                line_clr_cls_predictions = predictions[:, 2:6]   # (num_priors, 4)
+                line_typ_cls_predictions = predictions[:, 6:10]   # (num_priors, 4)
+                line_ego_cls_predictions = predictions[:, 10:13]  # (num_priors, 3)
+                line_class_cls_predictions = predictions[:, 13:15]  # (num_priors, 2)
+                line_group_cls_predictions = predictions[:, 15:17]  # (num_priors, 2)
+                line_curvature_cls_predictions = predictions[:, 17:19]  # (num_priors, 2)
+                line_direction_cls_predictions = predictions[:, 19:21]  # (num_priors, 2)
+                curb_position_cls_predictions = predictions[:, 21:24]  # (num_priors, 2)
+
+                predictions = torch.cat((predictions[:, :2],
+                                         predictions[:, 24:26] * self.n_strips,
+                                         predictions[:, 26:] * self.img_w),
+                                        dim=1)
+                ### our code ###
+                
+                # predictions = torch.cat((predictions[:, :2],
+                #                          predictions[:, 2:4] * self.n_strips,
+                #                          predictions[:, 4:] * self.img_w),
+                #                         dim=1)
+
+                with torch.no_grad():
+                    (matched_row_inds, matched_col_inds) = assign(
+                        predictions, target, self.img_w,
+                        k=self.cfg.angle_map_size[0])
+
+                attn_loss += MultiSegmentAttention.loss(
+                    predictions[:, 4:] / self.img_w,
+                    target[matched_col_inds, 4:] / self.img_w,
+                    attn[:, matched_row_inds])
+
+                # classification targets
+                cls_target = predictions.new_zeros(predictions.shape[0]).long()
+                cls_target[matched_row_inds] = 1
+                cls_pred = predictions[:, :2]
+
+                # color classification loss
+                # clr_cls_predictions size is (num_priors, 3)
+                # clr_cls_targets size is (num_lines, 3)
+                ### our code ###
+
+                # color classification loss
+                line_clr_cls_predictions = line_clr_cls_predictions[matched_row_inds, :]
+                line_clr_cls_targets = line_clr_cls_targets_batch[idx, matched_col_inds, :]
+                line_clr_cls_loss = line_clr_cls_loss + self.cls_criterion(line_clr_cls_predictions, line_clr_cls_targets).sum() / line_clr_cls_targets.shape[0]
+
+                # type classification loss
+                line_typ_cls_predictions = line_typ_cls_predictions[matched_row_inds, :]
+                line_typ_cls_targets = line_typ_cls_targets_batch[idx, matched_col_inds, :]
+                line_typ_cls_loss = line_typ_cls_loss + self.cls_criterion(line_typ_cls_predictions, line_typ_cls_targets).sum() / line_typ_cls_targets.shape[0]
+
+                # ego classification loss
+                line_ego_cls_predictions = line_ego_cls_predictions[matched_row_inds, :]
+                line_ego_cls_targets = line_ego_cls_targets_batch[idx, matched_col_inds, :]
+                line_ego_cls_loss = line_ego_cls_loss + self.cls_criterion(line_ego_cls_predictions, line_ego_cls_targets).sum() / line_ego_cls_targets.shape[0]
+
+                # line vs curb classification loss
+                line_class_cls_predictions = line_class_cls_predictions[matched_row_inds, :]
+                line_class_cls_targets = line_class_cls_targets_batch[idx, matched_col_inds, :]
+                line_class_cls_loss = line_class_cls_loss + self.cls_criterion(line_class_cls_predictions, line_class_cls_targets).sum() / line_class_cls_targets.shape[0]
+
+                # group classification loss
+                line_group_cls_predictions = line_group_cls_predictions[matched_row_inds, :]
+                line_group_cls_targets = line_group_cls_targets_batch[idx, matched_col_inds, :]
+                line_group_cls_loss = line_group_cls_loss + self.cls_criterion(line_group_cls_predictions, line_group_cls_targets).sum() / line_group_cls_targets.shape[0]
+
+                # curvature classification loss
+                line_curvature_cls_predictions = line_curvature_cls_predictions[matched_row_inds, :]
+                line_curvature_cls_targets = line_curvature_cls_targets_batch[idx, matched_col_inds, :]
+                line_curvature_cls_loss = line_curvature_cls_loss + self.cls_criterion(line_curvature_cls_predictions, line_curvature_cls_targets).sum() / line_curvature_cls_targets.shape[0]
+
+                # direction classification loss
+                line_direction_cls_predictions = line_direction_cls_predictions[matched_row_inds, :]
+                line_direction_cls_targets = line_direction_cls_targets_batch[idx, matched_col_inds, :]
+                line_direction_cls_loss = line_direction_cls_loss + self.cls_criterion(line_direction_cls_predictions, line_direction_cls_targets).sum() / line_direction_cls_targets.shape[0]
+
+                # curb position classification loss
+                curb_position_cls_predictions = curb_position_cls_predictions[matched_row_inds, :]
+                curb_position_cls_targets = curb_position_cls_targets_batch[idx, matched_col_inds, :]
+                curb_position_cls_loss = curb_position_cls_loss + self.cls_criterion(curb_position_cls_predictions, curb_position_cls_targets).sum() / curb_position_cls_targets.shape[0]
+                ### our code ###
+
+
+                # regression targets
+                reg_yl = predictions[matched_row_inds, 2:4]
+                target_yl = target[matched_col_inds, 2:4].clone()
+                with torch.no_grad():
+                    reg_start_y = torch.clamp(
+                        (reg_yl[:, 0]).round().long(), 0,
+                        self.n_strips)
+                    target_start_y = target_yl[:, 0].round().long()
+                    target_yl[:, 1] -= reg_start_y - target_start_y
+
+                reg_pred = predictions[matched_row_inds, 4:]
+                reg_targets = target[matched_col_inds, 4:].clone()
+
+                # Loss calculation
+                cls_loss = cls_loss + self.cls_criterion(cls_pred, cls_target).sum(
+                ) / target.shape[0]
+
+                l1_loss = l1_loss + F.smooth_l1_loss(reg_yl, target_yl,
+                                                       reduction="mean")
+
+                iou_loss = iou_loss + liou_loss(reg_pred, reg_targets,
+                                                self.img_w)
+
+        cls_loss /= (len(targets) * self.refine_layers)
+        l1_loss /= (len(targets) * self.refine_layers)
+        iou_loss /= (len(targets) * self.refine_layers)
+        attn_loss /= (len(targets) * self.refine_layers)
+
+        ### our code start ###
+        line_clr_cls_loss /= (len(targets) * self.refine_layers)
+        line_typ_cls_loss /= (len(targets) * self.refine_layers)
+        line_ego_cls_loss /= (len(targets) * self.refine_layers)
+        line_class_cls_loss /= (len(targets) * self.refine_layers)
+        line_group_cls_loss /= (len(targets) * self.refine_layers)
+        line_curvature_cls_loss /= (len(targets) * self.refine_layers)
+        line_direction_cls_loss /= (len(targets) * self.refine_layers)
+        curb_position_cls_loss /= (len(targets) * self.refine_layers)
+        ### our code end ###
+
+        return_value = {"cls_loss": cls_loss,
+                        "l1_loss": l1_loss,
+                        "iou_loss": iou_loss,
+                        "attn_loss": attn_loss,
+                        "line_clr_cls_loss": line_clr_cls_loss,
+                        "line_typ_cls_loss": line_typ_cls_loss,
+                        "line_ego_cls_loss": line_ego_cls_loss,
+                        "line_class_cls_loss": line_class_cls_loss,
+                        "line_group_cls_loss": line_group_cls_loss,
+                        "line_curvature_cls_loss": line_curvature_cls_loss,
+                        "line_direction_cls_loss": line_direction_cls_loss,
+                        "curb_position_cls_loss": curb_position_cls_loss
+                        }
+
+        return return_value
+
+    def predictions_to_pred(self, predictions, img_meta):
+        """
+        Convert predictions to internal Lane structure for evaluation.
+        """
+        prior_ys = self.prior_ys.to(predictions.device)
+        prior_ys = prior_ys.double()
+        lanes = []
+
+        for lane in predictions:
+            ### our code ###
+            lane_xs = lane[4:]  # normalized value
+            # lane_xs = lane[13:]
+            ### our code ###
+            start = min(max(0, int(round(lane[2].item() * self.n_strips))),
+                        self.n_strips)
+            length = int(round(lane[3].item()))
+            end = start + length - 1
+            end = min(end, self.n_strips)
+            # extend its prediction until the x is outside the image
+            mask = ~((((lane_xs[:start] >= 0.) & (lane_xs[:start] <= 1.)
+                       ).cpu().numpy()[::-1].cumprod()[::-1]).astype(bool))
+            lane_xs[end + 1:] = -2
+            lane_xs[:start][mask] = -2
+            lane_ys = prior_ys[(lane_xs >= 0.) & (lane_xs <= 1.)]
+            lane_xs = lane_xs[(lane_xs >= 0.) & (lane_xs <= 1.)]
+            if len(lane_xs) <= 1:
+                continue
+            lane_xs = lane_xs.flip(0).double()
+            lane_ys = lane_ys.flip(0)
+
+            if "img_cut_height" in img_meta:
+                cut_height = img_meta["img_cut_height"]
+                ori_img_h = img_meta["img_size"][0]
+                lane_ys = (lane_ys * (ori_img_h - cut_height) +
+                           cut_height) / ori_img_h
+            points = torch.stack(
+                (lane_xs.reshape(-1, 1), lane_ys.reshape(-1, 1)),
+                dim=1).squeeze(2)
+            lane = Lane(points=points.cpu().numpy(),
+                        metadata={})
+            lanes.append(lane)
+        return lanes
+
+    def get_lanes(self, output, img_metas, as_lanes=True):
+        """
+        Convert model output to lanes.
+        """
+        softmax = nn.Softmax(dim=1)
+
+        decoded = {}
+        img_metas = [item for img_meta in img_metas.data for item in img_meta]
+        decoded = {
+                "preds": [],
+                "cls_preds": {
+                    "color": [],
+                    "type": [],
+                    "ego": [],
+                    "class": [],
+                    "group": [],
+                    "curvature": [],
+                    "direction": [],
+                    "curb_position": [],
+                },
+            }
+        for predictions, img_meta in zip(output, img_metas):
+            # filter out the conf lower than conf threshold
+            threshold = self.cfg.test_parameters.conf_threshold
+            scores = softmax(predictions[:, :2])[:, 1]
+            keep_inds = scores >= threshold
+            predictions = predictions[keep_inds]
+            scores = scores[keep_inds]
+
+            if predictions.shape[0] == 0:
+                decoded['preds'].append([])
+                decoded['cls_preds']['color'].append([])
+                decoded['cls_preds']['type'].append([])
+                decoded['cls_preds']['ego'].append([])
+                decoded['cls_preds']['class'].append([])
+                decoded['cls_preds']['group'].append([])
+                decoded['cls_preds']['curvature'].append([])
+                decoded['cls_preds']['direction'].append([])
+                decoded['cls_preds']['curb_position'].append([])
+                continue
+            
+            ### our code ###
+            clr_cls_predictions = softmax(predictions[:, 2:6])   # (num_priors, 4)
+            typ_cls_predictions = softmax(predictions[:, 6:10])   # (num_priors, 4)
+            ego_cls_predictions = softmax(predictions[:, 10:13])  # (num_priors, 3)
+            line_vs_curb_cls_predictions = softmax(predictions[:, 13:15])  # (num_priors, 2)
+            group_cls_predictions = softmax(predictions[:, 15:17])  # (num_priors, 2)
+            curvature_cls_predictions = softmax(predictions[:, 17:19])  # (num_priors, 2)
+            direction_cls_predictions = softmax(predictions[:, 19:21])  # (num_priors, 2)
+            curb_position_cls_predictions = softmax(predictions[:, 21:23])  # (num_priors, 2)
+
+            predictions = torch.cat((predictions[:, :2],
+                                    predictions[:, 24:26],
+                                    predictions[:, 26:]),
+                                    dim=1)
+            ### our code ###
+
+            nms_preds = predictions.detach().clone()
+            
+            nms_preds[..., 2:4] *= self.n_strips
+            nms_preds[..., 3] = nms_preds[..., 2] + nms_preds[..., 3] - 1
+            nms_preds[..., 4:] *= self.img_w
+
+            keep, num_to_keep, _ = nms(
+                nms_preds,
+                scores,
+                overlap=self.cfg.test_parameters.nms_thres,
+                top_k=self.cfg.max_lanes)
+            # print(num_to_keep)
+            # print(keep)
+            if num_to_keep.item() > self.cfg.max_lanes or num_to_keep.item() <= 0:
+                decoded['preds'].append([])
+                decoded['cls_preds']['color'].append([])
+                decoded['cls_preds']['type'].append([])
+                decoded['cls_preds']['ego'].append([])
+                decoded['cls_preds']['class'].append([])
+                decoded['cls_preds']['group'].append([])
+                decoded['cls_preds']['curvature'].append([])
+                decoded['cls_preds']['direction'].append([])
+                decoded['cls_preds']['curb_position'].append([])
+
+                print("metas", img_metas, "num_to_keep", num_to_keep)
+                continue
+                
+            keep = keep[:num_to_keep]
+
+            predictions = predictions[keep]
+
+            ### our code ###
+            clr_cls_predictions = clr_cls_predictions[keep]
+            typ_cls_predictions = typ_cls_predictions[keep]
+            ego_cls_predictions = ego_cls_predictions[keep]
+            line_vs_curb_cls_predictions = line_vs_curb_cls_predictions[keep]
+            group_cls_predictions = group_cls_predictions[keep]
+            curvature_cls_predictions = curvature_cls_predictions[keep]
+            direction_cls_predictions = direction_cls_predictions[keep]
+            curb_position_cls_predictions = curb_position_cls_predictions[keep]
+            ### our code ###
+
+            if predictions.shape[0] == 0:
+                decoded['preds'].append([])
+                decoded['cls_preds']['color'].append([])
+                decoded['cls_preds']['type'].append([])
+                decoded['cls_preds']['ego'].append([])
+                decoded['cls_preds']['class'].append([])
+                decoded['cls_preds']['group'].append([])
+                decoded['cls_preds']['curvature'].append([])
+                decoded['cls_preds']['direction'].append([])
+                decoded['cls_preds']['curb_position'].append([])
+                continue
+            predictions[:, 3] = torch.round(predictions[:, 3] * self.n_strips)
+            if as_lanes:
+                pred = self.predictions_to_pred(predictions, img_meta)
+            else:
+                pred = predictions
+            decoded['preds'].append(pred)
+            decoded['cls_preds']['color'].append(clr_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['type'].append(typ_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['ego'].append(ego_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['class'].append(line_vs_curb_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['group'].append(group_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['curvature'].append(curvature_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['direction'].append(direction_cls_predictions.cpu().numpy())
+            decoded['cls_preds']['curb_position'].append(curb_position_cls_predictions.cpu().numpy())
+
+            
+        return decoded
+
+    # def __repr__(self):
+    #     num_params = sum(map(lambda x: x.numel(), self.parameters()))
+    #     return f"#Params of {self._get_name()}: {num_params / 10 ** 3:<.2f}[K]"
