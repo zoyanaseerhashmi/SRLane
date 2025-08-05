@@ -32,10 +32,11 @@ def worker_init_fn(worker_id, seed):
 
 def build_dataloader(split_cfg, cfg, is_train=True):
     dataset = build_dataset(split_cfg, cfg)
-
+    print(dataset.__len__())
     init_fn = partial(worker_init_fn, seed=cfg.seed)
 
     samples_per_gpu = cfg.batch_size // cfg.gpus
+    print('here samples_per_gpu:', samples_per_gpu)
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=cfg.batch_size,
@@ -45,5 +46,5 @@ def build_dataloader(split_cfg, cfg, is_train=True):
         drop_last=False,
         collate_fn=partial(collate, samples_per_gpu=samples_per_gpu),
         worker_init_fn=init_fn)
-
+    len(data_loader)
     return data_loader

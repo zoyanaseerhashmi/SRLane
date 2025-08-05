@@ -38,3 +38,4 @@ venv/
 work_dirs/
 data/
 *.pth
+*.zip

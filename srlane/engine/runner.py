@@ -13,6 +13,8 @@ from srlane.datasets import build_dataloader
 from srlane.utils.recorder import build_recorder
 from srlane.utils.net_utils import save_model, load_network
 
+import pickle as pkl
+
 
 class Runner(object):
     def __init__(self, cfg):
@@ -85,19 +87,27 @@ class Runner(object):
     @torch.no_grad()
     def validate(self):
         if not self.val_loader:
-            self.val_loader = build_dataloader(self.cfg.dataset.val,
+            self.val_loader = build_dataloader(self.cfg.dataset.test,
                                                self.cfg,
                                                is_train=False)
+        print(len(self.val_loader), "validation dataloader loaded")
         net = self.net
         net.eval()
+        # save_model(net, self.recorder)
+        outs = []
         predictions = []
+        # print('whereami')
         for i, data in enumerate(tqdm(self.val_loader, desc="Validate")):
+            
             output = net(data)
             output = net.module.roi_head.get_lanes(output, data["meta"])
-            predictions.extend(output)
+            predictions.extend(output['preds'])
+            outs.append({'lane_pts':output['preds'],'lane_cls':output['cls_preds'],'meta':data["meta"]})
             if self.cfg.view:
-                self.val_loader.dataset.view(output, data["meta"])
-
+                self.val_loader.dataset.view(output['preds'], output['cls_preds'], data["meta"])
+        
+        # with open('/media/data/ayman/dataset/deer_annotation/srlane.pkl','wb') as f:
+        #     pkl.dump(outs,f)
         metric = self.val_loader.dataset.evaluate(predictions,
                                                   self.cfg.work_dir)
         self.recorder.logger.info("metric: " + str(metric))

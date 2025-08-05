@@ -59,6 +59,7 @@ def build_from_cfg(cfg, registry, default_args=None):
     Returns:
         obj: The constructed object.
     """
+    print(cfg)
     assert isinstance(cfg, dict) and "type" in cfg
     assert isinstance(default_args, dict) or default_args is None
     args = cfg.copy()
@@ -74,5 +75,6 @@ def build_from_cfg(cfg, registry, default_args=None):
                         f"but got {type(obj_type)}")
     if default_args is not None:
         for name, value in default_args.items():
+            print(name)
             args.setdefault(name, value)
     return obj_cls(**args)
