@@ -236,7 +236,7 @@ class MotiveUpdatedCls(BaseDatasetCls):
         for lanes, line_color, line_type, line_ego, line_cls, line_group, line_curvature, line_direction, curb_position, img_meta in zip(predictions, cls_preds['color'], cls_preds['type'], cls_preds['ego'], cls_preds['class'], cls_preds['group'], cls_preds['curvature'], cls_preds['direction'], cls_preds['curb_position'], img_metas):
             img_name = img_meta["img_name"]
             # img = cv2.imread(osp.join(self.data_root, img_name))
-            img = cv2.imread(osp.join(self.data_root+"/images_resized", img_name))
+            img = cv2.imread(osp.join(self.data_root,"images_resized", img_name))
             out_file = osp.join(self.cfg.work_dir, "visualization",
                                 img_name.replace('/', '_'))
             lanes = [lane.to_array(img_meta["img_size"]) for lane in lanes]
@@ -280,100 +280,100 @@ class MotiveUpdatedCls(BaseDatasetCls):
                 infos["mask_path"] = None
 
                 anno_path = join(self.data_root, "annotations_resized", img_line[:-3]+"json")
-                # if not osp.exists(anno_path):
-                #     continue
-                # with open(anno_path, 'r') as anno_file:
-                #     data = json.load(anno_file)
+                if not osp.exists(anno_path):
+                    continue
+                with open(anno_path, 'r') as anno_file:
+                    data = json.load(anno_file)
                     
-                #     lanes_data = data["lines"]
+                    lanes_data = data["lines"]
                     
-                #     if "lanes" in lanes_data.keys():
-                #         for k in lanes_data["lanes"]:
-                #             lane_points = []
-                #             if len(lanes_data["lanes"][k]["polyline"]):
-                #                 exist_list.append(1)
-                #                 for kpt in lanes_data["lanes"][k]["polyline"]:
-                #                     point = tuple([kpt[1], kpt[0]])
-                #                     lane_points.append(point)
+                    if "lanes" in lanes_data.keys():
+                        for k in lanes_data["lanes"]:
+                            lane_points = []
+                            if len(lanes_data["lanes"][k]["polyline"]):
+                                exist_list.append(1)
+                                for kpt in lanes_data["lanes"][k]["polyline"]:
+                                    point = tuple([kpt[1], kpt[0]])
+                                    lane_points.append(point)
                                 
-                #                 if lanes_data["lanes"][k]["color"] is None:
-                #                     line_color.append("none")
-                #                 else:
-                #                     line_color.append(lanes_data["lanes"][k]["color"])
+                                if lanes_data["lanes"][k]["color"] is None:
+                                    line_color.append("none")
+                                else:
+                                    line_color.append(lanes_data["lanes"][k]["color"])
                                 
-                #                 if lanes_data["lanes"][k]["type"] is None:
-                #                     line_type.append("none")
-                #                 else:
-                #                     line_type.append(lanes_data["lanes"][k]["type"])
+                                if lanes_data["lanes"][k]["type"] is None:
+                                    line_type.append("none")
+                                else:
+                                    line_type.append(lanes_data["lanes"][k]["type"])
                                 
-                #                 if lanes_data["lanes"][k]["is_ego_left"] == 'True':
-                #                     line_ego.append("left")
-                #                 elif lanes_data["lanes"][k]["is_ego_right"] == 'True':
-                #                     line_ego.append("right")
-                #                 else:
-                #                     line_ego.append("none")
+                                if lanes_data["lanes"][k]["is_ego_left"] == 'True':
+                                    line_ego.append("left")
+                                elif lanes_data["lanes"][k]["is_ego_right"] == 'True':
+                                    line_ego.append("right")
+                                else:
+                                    line_ego.append("none")
                                 
-                #                 line_class.append('line')
+                                line_class.append('line')
 
-                #                 if lanes_data["lanes"][k]["group_id"] is not None:
-                #                     line_group.append('double')
-                #                 else:
-                #                     line_group.append('single')
+                                if lanes_data["lanes"][k]["group_id"] is not None:
+                                    line_group.append('double')
+                                else:
+                                    line_group.append('single')
                                 
-                #                 if lanes_data["lanes"][k]["is_curved"] == 'True':
-                #                     line_curvature.append("curve")
-                #                 elif lanes_data["lanes"][k]["is_curved"] == 'False':
-                #                     line_curvature.append("straight")
-                #                 else:
-                #                     line_curvature.append("none")
+                                if lanes_data["lanes"][k]["is_curved"] == 'True':
+                                    line_curvature.append("curve")
+                                elif lanes_data["lanes"][k]["is_curved"] == 'False':
+                                    line_curvature.append("straight")
+                                else:
+                                    line_curvature.append("none")
                                 
-                #                 line_direction.append(lanes_data["lanes"][k]["direction"])
+                                line_direction.append(lanes_data["lanes"][k]["direction"])
 
-                #                 curb_position.append("none")
+                                curb_position.append("none")
                             
-                #                 lanes.append(lane_points)
-                #             else:
-                #                 exist_list.append(0)
+                                lanes.append(lane_points)
+                            else:
+                                exist_list.append(0)
                     
-                #     if "curbs" in lanes_data.keys():
-                #         # print('here')
-                #         for k in lanes_data["curbs"]:
-                #             lane_points = []
-                #             if len(lanes_data["curbs"][k]["polyline"]):
-                #                 exist_list.append(1)
-                #                 for kpt in lanes_data["curbs"][k]["polyline"]:
-                #                     point = tuple([kpt[1], kpt[0]])
-                #                     lane_points.append(point)
+                    if "curbs" in lanes_data.keys():
+                        # print('here')
+                        for k in lanes_data["curbs"]:
+                            lane_points = []
+                            if len(lanes_data["curbs"][k]["polyline"]):
+                                exist_list.append(1)
+                                for kpt in lanes_data["curbs"][k]["polyline"]:
+                                    point = tuple([kpt[1], kpt[0]])
+                                    lane_points.append(point)
                                 
-                #                 line_color.append("none")
-                #                 line_type.append("none")
+                                line_color.append("none")
+                                line_type.append("none")
                                 
-                #                 if lanes_data["curbs"][k]["is_ego_left"] == 'True':
-                #                     line_ego.append("left")
-                #                 elif lanes_data["curbs"][k]["is_ego_right"] == 'True':
-                #                     line_ego.append("right")
-                #                 else:
-                #                     line_ego.append("none")
+                                if lanes_data["curbs"][k]["is_ego_left"] == 'True':
+                                    line_ego.append("left")
+                                elif lanes_data["curbs"][k]["is_ego_right"] == 'True':
+                                    line_ego.append("right")
+                                else:
+                                    line_ego.append("none")
                                 
-                #                 # print('here1')
-                #                 line_class.append('curb')
-                #                 # if line_class[-1] == 'curb':
-                #                 #     print('curb')
+                                # print('here1')
+                                line_class.append('curb')
+                                # if line_class[-1] == 'curb':
+                                #     print('curb')
 
-                #                 if lanes_data["curbs"][k]["is_curved"] == 'True':
-                #                     line_curvature.append("curve")
-                #                 elif lanes_data["curbs"][k]["is_curved"] == 'False':
-                #                     line_curvature.append("straight")
-                #                 else:
-                #                     line_curvature.append("none")
+                                if lanes_data["curbs"][k]["is_curved"] == 'True':
+                                    line_curvature.append("curve")
+                                elif lanes_data["curbs"][k]["is_curved"] == 'False':
+                                    line_curvature.append("straight")
+                                else:
+                                    line_curvature.append("none")
                                 
-                #                 curb_position.append(lanes_data["curbs"][k]["position"])
-                #                 line_group.append("none")
-                #                 line_direction.append("none")
+                                curb_position.append(lanes_data["curbs"][k]["position"])
+                                line_group.append("none")
+                                line_direction.append("none")
                             
-                #                 lanes.append(lane_points)
-                #             else:
-                #                 exist_list.append(0)
+                                lanes.append(lane_points)
+                            else:
+                                exist_list.append(0)
 
 
                     # lanes_data = data["lanes"]
@@ -521,7 +521,7 @@ class MotiveUpdatedCls(BaseDatasetCls):
             with open(join(output_dir, output_filename),
                       'w') as out_file:
                 out_file.write(output)
-            break
+            # break
         # if self.split == "test":
         #     for cate, cate_file in CATEGORYS.items():
         #         culane_metric.eval_predictions(output_basedir,
