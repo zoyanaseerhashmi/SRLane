@@ -274,7 +274,7 @@ class MotiveUpdatedCls(BaseDatasetCls):
                 line_group = [] # yes, no (2)
                 line_curvature = [] # straight, curve (2)
                 line_direction = [] # upstream, downstream (2)
-                curb_position = [] # left, right (2)
+                curb_position = [] # left, right, none (3)
 
 
                 infos["mask_path"] = None

@@ -6,7 +6,8 @@ dataset_type = "MotiveUpdatedCls"
 # dataset_path = "/media/data/lane_understanding_data/videos/selected_videos/2fps_frames/all_frames_dataset"
 # dataset_path = "/media/data/ayman/images_4_4_25"  # Path to the dataset
 # dataset_path = "/media/data/ayman/dataset/deer_annotation"
-dataset_path = "/media/data/lane_understanding_data/updated_annotations/"
+# dataset_path = "/media/data/lane_understanding_data/updated_annotations/"
+dataset_path = "/data2/zj/data/road_facing/lane_understanding"
 
 ori_img_w = 1280
 ori_img_h = 720

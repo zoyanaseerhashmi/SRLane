@@ -63,15 +63,15 @@ class RefineHeadMotive(nn.Module):
         self.z_embeddings = nn.Parameter(torch.zeros(self.sample_points),
                                          requires_grad=True)
 
-        self.gather_fc = nn.Conv1d(sample_points, fc_hidden_dim,
-                                   kernel_size=prior_feat_channels,
-                                   groups=self.num_groups)
+        # self.gather_fc = nn.Conv1d(sample_points, fc_hidden_dim,
+                                #    kernel_size=prior_feat_channels,
+                                #    groups=self.num_groups)
         self.shuffle_fc = nn.Linear(fc_hidden_dim, fc_hidden_dim)
         self.channel_fc = nn.ModuleList()
-        self.segment_attn = nn.ModuleList()
+        # self.segment_attn = nn.ModuleList()
         for i in range(1):
-            self.segment_attn.append(
-                MultiSegmentAttention(fc_hidden_dim, num_groups=num_groups))
+        #     self.segment_attn.append(
+        #         MultiSegmentAttention(fc_hidden_dim, num_groups=num_groups))
             self.channel_fc.append(
                 nn.Sequential(nn.Linear(fc_hidden_dim, 2 * fc_hidden_dim),
                               nn.ReLU(),
@@ -199,21 +199,34 @@ class RefineHeadMotive(nn.Module):
         feature = sampling_3d(grid, z_weight,
                               batch_features)  # (b, n_prior, n_point, c)
         feature = feature.view(batch_size * num_priors, -1,
-                               self.prior_feat_channels)
-        feature = self.gather_fc(feature).reshape(batch_size, num_priors, -1)
+                               self.prior_feat_channels) ## 256, 40, 36, 64
+        feature = self.gather_fc(feature).reshape(batch_size, num_priors, -1) ## 256,40,192
         for i in range(1):
-            res_feature, attn = self.segment_attn[i](feature, attn_mask=None)
+            res_feature, attn = self.segment_attn[i](feature, attn_mask=None) ## 256,40,192  .. 256,6,40,40
             feature = feature + self.channel_fc[i](res_feature)
         return feature, attn
 
     def forward(self, batch_features, priors, pre_feature=None):
         batch_size = batch_features[-1].shape[0]
         num_priors = priors.shape[1]
-        prior_feat_xs = (priors[..., 4 + self.sample_x_indexs]).flip(
-            dims=[2])  # top to bottom
+        
+        ## No Grid Sample ##
+        # prior_feat_xs = (priors[..., 4 + self.sample_x_indexs]).flip(
+        #     dims=[2])  # top to bottom
 
-        batch_prior_features, attn = self.pool_prior_features(
-            batch_features, num_priors, prior_feat_xs)
+        # batch_prior_features, attn = self.pool_prior_features(
+        #     batch_features, num_priors, prior_feat_xs) ## 256, 40, 192
+        ####################
+        
+        attn  = None
+        ## 14x25 -> 4x10 -> 40
+        
+        feat_h, feat_w  = self.cfg.angle_map_size[0], self.cfg.angle_map_size[1]
+        batch_prior_features = F.interpolate(
+            batch_features[0], size=(feat_h, feat_w),
+            mode="bilinear",
+            align_corners=True).view(batch_size, -1, feat_h * feat_w).permute(0,2,1)  # (B, C, H, W)
+        batch_prior_features = self.channel_fc[0](batch_prior_features)  # (B, H*W, C)
 
         fc_features = batch_prior_features
         fc_features = fc_features.reshape(batch_size * num_priors,
@@ -224,9 +237,10 @@ class RefineHeadMotive(nn.Module):
 
         cls_features = fc_features
         reg_features = fc_features
-        predictions = priors.clone()
+        predictions = priors.clone() ## 40x(22+76) 
         # create a tensor of zeros with shape (predictions.shape[0], predictions.shape[1], predictions.shape[2]+9)
-        predictions = torch.cat((predictions, predictions.new_zeros(predictions.shape[0], predictions.shape[1], 22)), dim=2)
+        # predictions = torch.cat((predictions, predictions.new_zeros(predictions.shape[0], predictions.shape[1], 22)), dim=2)
+
         # predictions = torch.cat((predictions, torch.zeros(predictions.shape[0], predictions.shape[1], predictions.shape[2]+9)), dim=2)
         if self.training or self.last_stage:
             for cls_layer in self.cls_modules:
@@ -431,9 +445,11 @@ class CascadeRefineHeadMotiveCls(nn.Module):
 
         for stage in range(0, self.refine_layers):
             predictions_list = predictions_lists[stage]
-            attn_list = attn_lists[stage]
-            for idx, (predictions, target, attn) in enumerate(
-                    zip(predictions_list, targets, attn_list)):
+            # attn_list = attn_lists[stage]
+            # for idx, (predictions, target, attn) in enumerate(
+            #         zip(predictions_list, targets, attn_list)):
+            for idx, (predictions, target) in enumerate(
+                    zip(predictions_list, targets)):
                 target = target[target[:, 1] == 1]
                 if len(target) == 0:
                     cls_target = predictions.new_zeros(
@@ -451,7 +467,7 @@ class CascadeRefineHeadMotiveCls(nn.Module):
                 line_group_cls_predictions = predictions[:, 15:17]  # (num_priors, 2)
                 line_curvature_cls_predictions = predictions[:, 17:19]  # (num_priors, 2)
                 line_direction_cls_predictions = predictions[:, 19:21]  # (num_priors, 2)
-                curb_position_cls_predictions = predictions[:, 21:24]  # (num_priors, 2)
+                curb_position_cls_predictions = predictions[:, 21:24]  # (num_priors, 3)
 
                 predictions = torch.cat((predictions[:, :2],
                                          predictions[:, 24:26] * self.n_strips,
@@ -469,10 +485,10 @@ class CascadeRefineHeadMotiveCls(nn.Module):
                         predictions, target, self.img_w,
                         k=self.cfg.angle_map_size[0])
 
-                attn_loss += MultiSegmentAttention.loss(
-                    predictions[:, 4:] / self.img_w,
-                    target[matched_col_inds, 4:] / self.img_w,
-                    attn[:, matched_row_inds])
+                # attn_loss += MultiSegmentAttention.loss(
+                #     predictions[:, 4:] / self.img_w,
+                #     target[matched_col_inds, 4:] / self.img_w,
+                #     attn[:, matched_row_inds])
 
                 # classification targets
                 cls_target = predictions.new_zeros(predictions.shape[0]).long()
@@ -552,7 +568,7 @@ class CascadeRefineHeadMotiveCls(nn.Module):
         cls_loss /= (len(targets) * self.refine_layers)
         l1_loss /= (len(targets) * self.refine_layers)
         iou_loss /= (len(targets) * self.refine_layers)
-        attn_loss /= (len(targets) * self.refine_layers)
+        # attn_loss /= (len(targets) * self.refine_layers)
 
         ### our code start ###
         line_clr_cls_loss /= (len(targets) * self.refine_layers)
@@ -673,7 +689,7 @@ class CascadeRefineHeadMotiveCls(nn.Module):
             group_cls_predictions = softmax(predictions[:, 15:17])  # (num_priors, 2)
             curvature_cls_predictions = softmax(predictions[:, 17:19])  # (num_priors, 2)
             direction_cls_predictions = softmax(predictions[:, 19:21])  # (num_priors, 2)
-            curb_position_cls_predictions = softmax(predictions[:, 21:23])  # (num_priors, 2)
+            curb_position_cls_predictions = softmax(predictions[:, 21:24])  # (num_priors, 3)
 
             predictions = torch.cat((predictions[:, :2],
                                     predictions[:, 24:26],

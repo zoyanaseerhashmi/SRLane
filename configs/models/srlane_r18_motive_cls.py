@@ -45,7 +45,7 @@ rpn_head = dict(type="LocalAngleHead",
 
 roi_head = dict(type="CascadeRefineHeadMotiveCls",
                 refine_layers=1,
-                fc_hidden_dim=hidden_dim * 3,
+                fc_hidden_dim=hidden_dim, #* 3,
                 prior_feat_channels=hidden_dim,
                 sample_points=36,  # 36
                 num_groups=6,)

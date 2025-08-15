@@ -63,6 +63,15 @@ class LocalAngleHead(nn.Module):
     def init_weights(self):
         for m in self.angle_conv.parameters():
             nn.init.normal_(m, 0., 1e-3)
+    
+    def sin(self,theta):
+        return (16*theta*(math.pi - theta))/(5*math.pi**2 - 4*theta*(math.pi - theta))
+
+    def cos(self,theta):
+            return (math.pi**2 - 4*theta**2)/(math.pi**2 + theta**2)
+
+    def tan(self,theta):    
+        return self.sin(theta) / self.cos(theta)
 
     def forward(self,
                 feats: List[Tensor], ):
@@ -95,20 +104,22 @@ class LocalAngleHead(nn.Module):
         # Remove excessively tilted angles, optional
         angle.clamp_(min=0.05, max=0.95)
         # Build lane proposals
-        k = (angle * math.pi).tan()
+        # k = (angle * math.pi).tan()
+        k = self.tan(angle * math.pi)
         bs, h, w = angle.shape
         grid = self.grid
         ws = ((self.prior_ys.view(1, 1, self.n_offsets)
                - grid[:, 1].view(1, h * w, 1)) / k.view(bs, h * w, 1)
               + grid[:, 0].view(1, h * w, 1))  # (bs, h*w, n_offsets)
         ws = ws / w
-        valid_mask = (0 <= ws) & (ws < 1)
-        _, indices = valid_mask.max(-1)
-        start_y = indices / (self.n_offsets - 1)  # (bs, h*w)
+        
+        # valid_mask = (0 <= ws) & (ws < 1)
+        # _, indices = valid_mask.max(-1)
+        # start_y = indices / (self.n_offsets - 1)  # (bs, h*w)
         priors = ws.new_zeros(
-            (bs, h * w, 2 + 2 + self.n_offsets), device=ws.device)
-        priors[..., 2] = start_y
-        priors[..., 4:] = ws
+            (bs, h * w, 2 + 2 + 22 + self.n_offsets), device=ws.device)
+        # priors[..., 2] = start_y
+        priors[..., 26:] = ws
 
         return dict(priors=priors,
                     pred_angle=[theta.squeeze(1) for theta in theta_list]
@@ -140,7 +151,7 @@ class LocalAngleHead(nn.Module):
             valid_mask = target > ignore_value
             angle_loss = (angle_loss
                           + ((pred - target).abs() * valid_mask).sum()
-                          / (valid_mask.sum() + 1e-4)) * weight
+                          / (valid_mask.sum() + 1e-4) * weight ) ## is weight being correctly multiplied??
         if self.aux_seg:
             seg_loss = 0
             for pred, target, weight in zip(pred_seg, gt_seg, loss_weight):
