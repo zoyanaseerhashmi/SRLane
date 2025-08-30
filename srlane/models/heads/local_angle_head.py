@@ -9,6 +9,18 @@ from torch import Tensor
 from srlane.models.registry import HEADS
 from srlane.models.losses.seg_loss import SegLoss
 
+pi = torch.tensor(math.pi)
+def sin(theta):
+    return (16*theta*(pi - theta))/(5*pi**2 - 4*theta*(pi - theta))
+
+def cos(theta: torch.Tensor) -> torch.Tensor:
+    cos_q1 = sin(torch.clamp(theta, min=0, max=pi/2) + pi / 2)
+    cos_q2 = -sin(torch.clamp(theta, min=pi/2, max=pi) - pi / 2)    
+    return cos_q1 + cos_q2        
+    # return (math.pi**2 - 4*theta**2)/(math.pi**2 + theta**2)
+
+def tan(theta):    
+    return sin(theta) / (cos(theta) + 1e-12)
 
 @HEADS.register_module
 class LocalAngleHead(nn.Module):
@@ -64,15 +76,6 @@ class LocalAngleHead(nn.Module):
         for m in self.angle_conv.parameters():
             nn.init.normal_(m, 0., 1e-3)
     
-    def sin(self,theta):
-        return (16*theta*(math.pi - theta))/(5*math.pi**2 - 4*theta*(math.pi - theta))
-
-    def cos(self,theta):
-            return (math.pi**2 - 4*theta**2)/(math.pi**2 + theta**2)
-
-    def tan(self,theta):    
-        return self.sin(theta) / self.cos(theta)
-
     def forward(self,
                 feats: List[Tensor], ):
         """This method performs the forward propagation process.
@@ -105,7 +108,7 @@ class LocalAngleHead(nn.Module):
         angle.clamp_(min=0.05, max=0.95)
         # Build lane proposals
         # k = (angle * math.pi).tan()
-        k = self.tan(angle * math.pi)
+        k = tan(angle * math.pi)
         bs, h, w = angle.shape
         grid = self.grid
         ws = ((self.prior_ys.view(1, 1, self.n_offsets)
